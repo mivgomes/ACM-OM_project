@@ -1,0 +1,164 @@
+# Project in Applied Computational Multi-Omics
+##### _MCMSc in Computational Biology and Bioinformatics, June 2024_
+###### _Beatriz Infante (69348), Inês Pacheco (68826) and Maria Inês Gomes (68828)_
+
+### ChiP-seq analysis
+
+- SRR1804794.fastq -> ChIP-Seq
+- SRR1804795.fastq -> Input
+
+#### Align the ChIPseq and Input data to the human genome using [*bowtie2*][bowtie2]
+> ChiP-seq
+
+```sh
+docker run -v $PWD:$PWD -w=$PWD --rm staphb/bowtie2 bowtie2 -k 1 --threads 10 -x ./Genomes/GRCh38_noalt_as/GRCh38_noalt_as -U SRR1804794.fastq -S SOX15_ChiPseq.sam
+```
+
+The summary received from running the Bowtie2 alignment command provides information about the alignment statistics of the ChIP-seq data:
+- 28521182 reads: Total number of reads processed by Bowtie2.
+- 28521182 (100.00%) were unpaired: This confirms that all the reads are unpaired (single-end reads), the -U option is for single-end reads.
+- 20423 (0.07%) aligned 0 times: This indicates that 20,423 reads (0.07% of the total) did not align to the reference genome. These reads are considered "unmapped."
+- 28500759 (99.93%) aligned exactly 1 time: This shows that 28,500,759 reads (99.93% of the total) aligned exactly once to the reference genome. This is a very high alignment rate, indicating that most of your reads are matching the reference genome uniquely.
+- 0 (0.00%) aligned >1 times: This indicates that no reads aligned to the reference genome more than once. The -k 1 parameter, restricts Bowtie2 to report only the best alignment for each read.
+- 99.93% overall alignment rate: This is the overall percentage of reads that successfully aligned to the reference genome, calculated as (aligned exactly 1 time + aligned >1 times) / total reads. 99.93%, indicates a successful alignment.
+
+> These statistics suggest that the ChIP-seq data has aligned well to the human genome reference (GRCh38_noalt_as). The high alignment rate (99.93%) indicates that nearly all reads found a unique place in the genome, which is a good indication of the quality of the sequencing data and the appropriateness of the reference genome you used.
+
+
+> Input
+```sh
+docker run -v $PWD:$PWD -w=$PWD --rm staphb/bowtie2 bowtie2 -k 1 --threads 10 -x ./Genomes/GRCh38_noalt_as/GRCh38_noalt_as -U SRR1804795.fastq -S INPUT.sam
+```
+Summary statistics for the alignment with the Input file:
+26074097 reads
+26074097 (100.00%) were unpaired
+17316 (0.07%) aligned 0 times
+26056781 (99.93%) aligned exactly 1 time
+0 (0.00%) aligned >1 times
+99.93% overall alignment rate
+
+
+#### Convert the output file in bam format and sort (i.e. sort the reads by genomic position) using [*sambamba tool*][sam]
+> ChiP-seq
+
+```sh
+docker run -v $PWD:$PWD -w=$PWD --rm miguelpmachado/sambamba:0.7.1-01 sambamba view -t 10 -S -f bam SOX15_ChiPseq.sam -o SOX15_ChiPseq_temp.bam   
+
+docker run -v $PWD:$PWD -w=$PWD --rm miguelpmachado/sambamba:0.7.1-01 sambamba sort -t 10 -o SOX15_ChiPseq.bam SOX15_ChiPseq_temp.bam
+
+rm SOX15_ChiPseq_temp.bam
+```
+> Input
+
+```sh
+docker run -v $PWD:$PWD -w=$PWD --rm miguelpmachado/sambamba:0.7.1-01 sambamba view -t 10 -S -f bam INPUT.sam -o INPUT_temp.bam
+
+docker run -v $PWD:$PWD -w=$PWD --rm miguelpmachado/sambamba:0.7.1-01 sambamba sort -t 10 -o INPUT.bam INPUT_temp.bam
+
+rm INPUT_temp.bam
+```
+
+
+#### Identify enriched ChIPseq regions (i.e. peaks) comparing the ChIP and input samples with [*MACS2*][macs2]
+
+```sh
+docker run -v $PWD:$PWD -w=$PWD --rm resolwebio/chipseq:5.1.3 macs2 callpeak -t SOX15_ChiPseq.bam -c INPUT.bam -f BAM -g 2.7e9 -q 0.05 -n SOX15 --outdir MACS2Output
+```
+*MACS2* Parameters:
+-g (effective genome size): This parameter specifies the size of the genome to be used for peak calling. 
+-q (q-value cutoff): The q-value is the FDR (False Discovery Rate) adjusted p-value threshold for peak detection.
+--broad: This option is used to call broad peaks instead of the default narrow peaks. Broad peaks are often used for histone modifications where the enrichment regions are wide, which is not the case with SOX15.
+
+Count the number of peaks:
+```sh
+wc -l MACS2Output/SOX15_peaks.narrowPeak
+160 MACS2Output/SOX15_peaks.narrowPeak
+```
+This indicates that 160 peaks were identified.
+
+Extract peaks from chromosome 5:
+```sh
+grep -w 'chr5' MACS2Output/SOX15_peaks.narrowPeak | head -n 2
+```
+
+| Chromossome | Start position | End position | Peak ID | Score |Strand |signalValue |pValue |qvalue |peak |
+| ------ | ------ | ------ | ------ | ------ |------ |------ |------ |------ |------ |
+| chr5   | 5271487| 5271751|SOX15_peak_109| 29| . | 4.34577|7.84899|2.92391  | 85
+| chr5   | 9924620|9924868 | SOX15_peak_110| 46| . |4.27126 |10.05897  | 4.65962 | 75
+
+Difference between narrowPeak and summits.bed:
+```sh
+head MACS2Output/SOX15_summits.bed
+```
+| Chromossome | Start position | End position | Peak ID | Score |
+| ------ | ------ | ------ | ------ | ------ |
+| chr1 | 82227781 | 82227782|SOX15_peak_1| 4.02574
+| chr1 |93079162  |93079163 | SOX15_peak_2| 9.87931
+| chr1 | 173062259 |173062260 | SOX15_peak_3|5.46890
+| chr1 |173269781  |173269782 | SOX15_peak_4|7.58579
+
+The 'narrowPeak' file provides a range (start and end) for each peak along with additional statistics, whereas the 'summits.bed' file provides the exact position of the highest enrichment point within each peak.
+
+
+#### Filter out blacklisted regions from ChIPseq results with [*bedtools*][bedtools]
+```sh
+docker run -v $PWD:$PWD -w=$PWD biocontainers/bedtools:v2.27.1dfsg-4-deb_cv1 bedtools intersect -v -a MACS2Output/SOX15_peaks.narrowPeak -b Genomes/hg38.blacklist.bed > SOX15_peaks_filtered.bed
+
+docker run -v $PWD:$PWD -w=$PWD biocontainers/bedtools:v2.27.1dfsg-4-deb_cv1 bedtools intersect -v -a MACS2Output/SOX15_summits.bed -b Genomes/hg38.blacklist.bed > SOX15_summit_filtered.bed
+```
+
+```sh
+head SOX15_summit_filtered.bed
+```
+| Chromossome | Start position | End position | Peak ID | Score |
+| ------ | ------ | ------ | ------ | ------ |
+| chr1 | 82227781 | 82227782|SOX15_peak_1| 4.02574
+| chr1 |93079162  |93079163 | SOX15_peak_2| 9.87931
+| chr1 | 173062259 |173062260 | SOX15_peak_3|5.46890
+| chr1 |173269781  |173269782 | SOX15_peak_4|7.58579
+
+```sh
+wc -l SOX15_summit_filtered.bed
+160 SOX15_summit_filtered.bed
+```
+No black regions were removed.
+
+#### Identify enriched motifs in ChIPseq peaks with [*bedtools*][bedtools] and [*HOMER*][homer]
+
+The analysis of motif enrichment should be done using the peak summit location extended by 200bp.  
+First, we should extend the genomic coordinates of the peak summit by 200bp upstream and downstream using the function “slop” from BedTools using the text file containing the size of each human chromosome (genomeSize.txt). The function output should be a bed file (extension .bed). 
+
+```sh
+docker run -v $PWD:$PWD -w=$PWD biocontainers/bedtools:v2.27.1dfsg-4-deb_cv1 bedtools slop -i SOX15_summit_filtered.bed -g Genomes/genomeSize.txt -b 200 > SOX15_summit_filtered_ext200bp.bed
+```
+```sh
+head SOX15_summit_filtered_ext200bp.bed
+```
+
+| Chromossome | Start position | End position | Peak ID | Score |
+| ------ | ------ | ------ | ------ | ------ |
+| chr1 | 82227581 | 82227982|SOX15_peak_1| 4.02574
+| chr1 |93078962  |93079363 | SOX15_peak_2| 9.87931
+| chr1 | 173062059 |173062460 | SOX15_peak_3|5.46890
+| chr1 |173269581  |173269982 | SOX15_peak_4|7.58579
+
+If we compare with the previous file (SOX15_summit_filtered.bed) we can see that the coordinates are extended in 200 bp upstream and downstream.
+
+Then, we should get the DNA sequences for each peak summit using the function “getFasta” from Bedtools using the fasta file containing the entire human genome sequence (GCA_000001405.15_GRCh38_no_alt_analysis_set.fna). The function output should be a fasta file (extension .fasta). 
+```sh
+docker run -v $PWD:$PWD -w=$PWD biocontainers/bedtools:v2.27.1dfsg-4-deb_cv1 bedtools getfasta -fi Genomes/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -bed SOX15_summit_filtered_ext200bp.bed > SOX15_summit_filtered_ext200bp.fasta
+```
+
+Finally, we can perform the motif enrichment analysis using the “findMotifs” function from HOMER tool (Docker image nfcore/chipseq:latest) using all gene promoters as background sequences (gencode.v26.annotation_promoters.fasta). 
+
+```sh
+docker run -v $PWD:$PWD -w=$PWD --rm nfcore/chipseq:latest findMotifs.pl SOX15_summit_filtered_ext200bp.fasta fasta HOMER -fasta Genomes/gencode.v26.annotation_promoters.fasta
+```
+
+   [Git]: <https://github.com/mivgomes/ACM-OM_project/blob/d73c88e983dd7cd38d810a5051dc977c1cf42b2c/ChiP-seq_SOX15>
+   [bowtie2]: <https://bowtie-bio.sourceforge.net/bowtie2/index.shtml>
+   [sam]: <https://lomereiter.github.io/sambamba/docs/sambamba-view.html>
+   [macs2]: <https://hbctraining.github.io/Intro-to-ChIPseq/lessons/05_peak_calling_macs.html>
+   [bedtools]: <https://bedtools.readthedocs.io/en/latest/>
+   [homer]: <http://homer.ucsd.edu/homer/motif/fasta.html>
+
